@@ -42,18 +42,6 @@ jobs:
             echo "✅ Tag $TAG_NAME does not exist, will create release"
           fi
 
-      - name: Create GitHub Release
-        if: steps.version.outputs.release_created == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.tag_name }}
-          name: Release ${{ steps.version.outputs.tag_name }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   # ============================================================
   # 2. 构建并部署到 gh-pages
   # ============================================================
@@ -68,11 +56,11 @@ jobs:
       matrix:
         font:
           - { key: all, suffix: '' }
-          - { key: cdn, suffix: '-cdn-fonts' }
-          - { key: firasans, suffix: '-firasans-only' }
-          - { key: misans, suffix: '-misans-only' }
-          - { key: pingfang, suffix: '-pingfang-only' }
-          - { key: sarasa, suffix: '-sarasa-only' }
+          # - { key: cdn, suffix: '-cdn-fonts' }
+          # - { key: firasans, suffix: '-firasans-only' }
+          # - { key: misans, suffix: '-misans-only' }
+          # - { key: pingfang, suffix: '-pingfang-only' }
+          # - { key: sarasa, suffix: '-sarasa-only' }
           - { key: none, suffix: '-no-fonts' }
     steps:
       - uses: actions/checkout@v6
@@ -101,17 +89,17 @@ jobs:
   release-dist:
     needs: create-release
     runs-on: ubuntu-latest
-    if: ${{ needs.create-release.outputs.release_created == 'true' }}
+    # if: ${{ needs.create-release.outputs.release_created == 'true' }}
     strategy:
       fail-fast: false
       matrix:
         font:
           - { key: all, suffix: '' }
-          - { key: cdn, suffix: '-cdn-fonts' }
-          - { key: firasans, suffix: '-firasans-only' }
-          - { key: misans, suffix: '-misans-only' }
-          - { key: pingfang, suffix: '-pingfang-only' }
-          - { key: sarasa, suffix: '-sarasa-only' }
+          # - { key: cdn, suffix: '-cdn-fonts' }
+          # - { key: firasans, suffix: '-firasans-only' }
+          # - { key: misans, suffix: '-misans-only' }
+          # - { key: pingfang, suffix: '-pingfang-only' }
+          # - { key: sarasa, suffix: '-sarasa-only' }
           - { key: none, suffix: '-no-fonts' }
     steps:
       - uses: actions/checkout@v6
