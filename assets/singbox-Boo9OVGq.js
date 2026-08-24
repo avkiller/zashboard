@@ -1,0 +1,1 @@
+import{h as e,m as t}from"./index-3tA_KGBW.js";var n=async()=>{e.value=[],t.value=[]};export{n as fetchRules};
