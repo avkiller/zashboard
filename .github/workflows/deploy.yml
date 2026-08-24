@@ -12,68 +12,53 @@ permissions:
 
 jobs:
   # ============================================================
-  # 1. 创建 Release Job（替代 release-please）
+  # 1. 创建 Release Job（简化版）
   # ============================================================
   create-release:
     runs-on: ubuntu-latest
     outputs:
-      tag_name: ${{ steps.get_version.outputs.tag_name }}
-      release_created: ${{ steps.create_release.outputs.release_created }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      release_created: ${{ steps.version.outputs.release_created }}
     permissions:
       contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0 # 获取所有标签和提交历史
+          fetch-depth: 0
 
-      - name: Get version from package.json
-        id: get_version
+      - name: Get version and check tag
+        id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag_name=v$VERSION" >> $GITHUB_OUTPUT
-          echo "Current version: v$VERSION"
+          TAG_NAME="v$VERSION"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
-      - name: Check if tag already exists
-        id: check_tag
-        run: |
-          TAG_NAME="v$(node -p "require('./package.json').version")"
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag $TAG_NAME already exists, skipping release creation"
+            echo "release_created=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Tag $TAG_NAME already exists, skipping release creation"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Tag $TAG_NAME does not exist, will create release"
+            echo "release_created=true" >> $GITHUB_OUTPUT
+            echo "✅ Tag $TAG_NAME does not exist, will create release"
           fi
 
       - name: Create GitHub Release
-        id: create_release
-        if: steps.check_tag.outputs.exists == 'false'
+        if: steps.version.outputs.release_created == 'true'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.get_version.outputs.tag_name }}
-          name: Release ${{ steps.get_version.outputs.tag_name }}
-          generate_release_notes: true # GitHub 自动生成 Release Notes
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: Release ${{ steps.version.outputs.tag_name }}
+          generate_release_notes: true
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set release_created output
-        id: set_output
-        run: |
-          if [ "${{ steps.check_tag.outputs.exists }}" == "false" ]; then
-            echo "release_created=true" >> $GITHUB_OUTPUT
-          else
-            echo "release_created=false" >> $GITHUB_OUTPUT
-          fi
-
   # ============================================================
-  # 2. 构建并部署到 gh-pages（不变，仅依赖改为 create-release）
+  # 2. 构建并部署到 gh-pages
   # ============================================================
   build-and-deploy:
-    needs: create-release # 改为依赖 create-release
+    needs: create-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -111,12 +96,11 @@ jobs:
           force_orphan: true
 
   # ============================================================
-  # 3. 打包并上传到 Release（依赖 create-release 的输出）
+  # 3. 打包并上传到 Release
   # ============================================================
   release-dist:
-    needs: create-release # 改为依赖 create-release
+    needs: create-release
     runs-on: ubuntu-latest
-    # 仅在创建了新 Release 时执行
     if: ${{ needs.create-release.outputs.release_created == 'true' }}
     strategy:
       fail-fast: false
