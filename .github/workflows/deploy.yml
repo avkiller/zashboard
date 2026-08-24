@@ -25,10 +25,14 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           release-type: node
           target-branch: main
+          release-version: '3.22.0'
 
   build-and-deploy:
     needs: release-please
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # 允许创建 Release 和 Tag
+      pull-requests: write
     strategy:
       fail-fast: false
       matrix:
