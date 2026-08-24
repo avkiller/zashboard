@@ -94,7 +94,7 @@ jobs:
       fail-fast: false
       matrix:
         font:
-          - { key: all, suffix: '' }
+          - { key: all, suffix: '-gh-pages' }
           # - { key: cdn, suffix: '-cdn-fonts' }
           # - { key: firasans, suffix: '-firasans-only' }
           # - { key: misans, suffix: '-misans-only' }
@@ -112,12 +112,12 @@ jobs:
         run: |
           pnpm i
           pnpm run build
-          zip -r dist${{ matrix.font.suffix }}.zip dist
+          zip -r zashboard${{ matrix.font.suffix }}.zip dist
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: dist${{ matrix.font.suffix }}.zip
+          files: zashboard${{ matrix.font.suffix }}.zip
           tag_name: ${{ needs.create-release.outputs.tag_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
