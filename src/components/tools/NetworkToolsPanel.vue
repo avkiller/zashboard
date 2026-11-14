@@ -294,7 +294,7 @@ import { computed, defineComponent, h, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const NETWORK_QUALITY_DEFAULT_URL = 'https://mensura.cdn-apple.com/api/v1/gm/config'
-const STUN_DEFAULT_SERVER = 'stun.voipgate.com:3478'
+const STUN_DEFAULT_SERVER = 'stun.fuxudong.com:3478'
 
 const { t } = useI18n()
 
