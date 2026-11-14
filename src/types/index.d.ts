@@ -1,6 +1,8 @@
+export * from './dae'
 import type { Connection as SingboxConnectionRawMessage } from '@/gen/daemon/started_service_pb'
+import type { DaeConnectionRawMessage } from './dae'
 
-export type BackendType = 'clash' | 'singbox'
+export type BackendType = 'clash' | 'dae' | 'singbox'
 
 export type Backend = {
   // 后端登录类型:'clash' 走 Clash REST/WS API,'singbox' 走 sing-box API(gRPC)。
@@ -9,8 +11,9 @@ export type Backend = {
   protocol: string
   host: string
   port: string
-  secondaryPath: string // 仅 clash
-  password: string // 通用:Clash secret / sing-box gRPC Bearer token
+  secondaryPath: string
+  password: string
+  username?: string
   uuid: string
   label?: string
   disableUpgradeCore?: boolean // 仅 clash
@@ -32,6 +35,7 @@ export type Config = {
   ipv6: boolean
   tun: {
     enable: boolean
+    stack?: string
   }
 }
 
@@ -41,6 +45,7 @@ export type History = {
 }[]
 
 export type Proxy = {
+  id?: string
   name: string
   type: string
   history: History
@@ -73,6 +78,7 @@ export type SubscriptionInfo = {
 
 export type ProxyProvider = {
   subscriptionInfo?: SubscriptionInfo
+  id?: string
   name: string
   proxies: Proxy[]
   testUrl: string
@@ -86,9 +92,7 @@ export type Rule = {
   proxy: string
   size: number
   uuid: string
-  // sing-box-reFind
   disabled?: boolean
-  // mihomo
   index: number
   extra?: {
     disabled: false
@@ -146,7 +150,8 @@ export type ClashConnectionRawMessage = {
   }
 }
 
-export type ConnectionRawMessage = ClashConnectionRawMessage | SingboxConnectionRawMessage
+export type ConnectionRawMessage =
+  ClashConnectionRawMessage | DaeConnectionRawMessage | SingboxConnectionRawMessage
 
 export type Connection = ConnectionRawMessage & {
   downloadSpeed: number
@@ -158,7 +163,9 @@ export type Log = {
   payload: string
 }
 
-export type LogWithSeq = Log & { seq: number; time: string }
+// payload 保留后端原始内容(sing-box 会带 ANSI 颜色码),供渲染用;
+// visiblePayload 是剥离转义序列后的可见文本,搜索 / 隐藏 / 分类一律以它为准。
+export type LogWithSeq = Log & { seq: number; time: string; visiblePayload: string }
 
 export type DNSQuery = {
   AD: boolean
@@ -187,9 +194,19 @@ export type SourceIPLabel = {
   scope?: string[]
 }
 
-// smart core
 export interface NodeRank {
   Name: string
   Rank: string
   Weight: number
+}
+
+export type HonkStats = {
+  outbounds: {
+    name: string
+    totalConns: number
+    activeConns: number
+    upload: number
+    download: number
+    errors: number
+  }[]
 }

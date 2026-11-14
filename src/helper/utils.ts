@@ -11,16 +11,32 @@ export const isPWA = (() => {
 })()
 
 export const prettyBytesHelper = (bytes: number, opts?: Options) => {
-  // prettyBytes 对 NaN / Infinity 是抛错的。格式化函数几乎全在渲染函数里调用,
-  // 一个脏字段抛出去就会毁掉整棵 vnode 树(而不只是这一格),故就地兜住。
   return prettyBytes(Number.isFinite(bytes) ? bytes : 0, {
     binary: false,
     ...opts,
   })
 }
 
+export const prettySpeedHelper = (bytes: number, opts?: Options) => {
+  const value = Number.isFinite(bytes) ? bytes : 0
+  const maximumFractionDigits = opts?.maximumFractionDigits ?? 1
+
+  return value < 1000
+    ? `${(value / 1000).toFixed(maximumFractionDigits)} kB`
+    : prettyBytesHelper(value, { maximumFractionDigits, ...opts })
+}
+
 export const fromNow = (timestamp: string | number) => {
   return dayjs(timestamp).fromNow()
+}
+
+export const prettyUptimeHelper = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return '-'
+
+  const days = Math.floor(seconds / 86400)
+  const time = dayjs.duration(seconds % 86400, 'seconds').format('HH:mm:ss')
+
+  return days > 0 ? `${days}d ${time}` : time
 }
 
 export const getDashboardSettingsFromStorage = () => {
@@ -63,13 +79,19 @@ export const resetSettings = () => {
   window.location.reload()
 }
 
+export const getHostFromBackend = (end: { host: string; port: string }) => {
+  const host = end.host.includes(':') && !end.host.startsWith('[') ? `[${end.host}]` : end.host
+
+  return `${host}:${end.port}`
+}
+
 export const getUrlFromBackend = (end: {
   protocol: string
   host: string
   port: string
   secondaryPath?: string
 }) => {
-  return `${end.protocol}://${end.host}:${end.port}${end.secondaryPath || ''}`
+  return `${end.protocol}://${getHostFromBackend(end)}${end.secondaryPath || ''}`
 }
 
 // sing-box 后端复用顶层连接字段作为 gRPC baseUrl(secondaryPath 留空)。
@@ -88,7 +110,7 @@ export const getBackendProbeUrl = (end: Omit<Backend, 'uuid'>) =>
   end.type === 'singbox' ? getSingboxUrlFromBackend(end) : getUrlFromBackend(end)
 
 export const getLabelFromBackend = (end: Omit<Backend, 'uuid'>) => {
-  return end.label || `${end.host}:${end.port}`
+  return end.label || getHostFromBackend(end)
 }
 
 export const getMinCardWidth = (size: PROXY_CARD_SIZE) => {
@@ -97,44 +119,6 @@ export const getMinCardWidth = (size: PROXY_CARD_SIZE) => {
 
 export const PROXIES_PARENT_CLASS = 'proxies-scrollable-parent'
 
-export const scrollIntoCenter = (el: HTMLElement) => {
-  const scrollableParent = findScrollableParent(el)
-
-  if (!scrollableParent) return
-
-  const parentTop = scrollableParent.offsetTop
-  const childTop = el.offsetTop
-
-  // 判断可见性只能用布局位置(offsetTop),不能用 getBoundingClientRect:
-  // 列表重排时 TransitionGroup 的 FLIP 会给卡片挂 transform,rect 停在动画起点(旧位置,
-  // 通常还在视口内),会被误判成"已经可见"而跳过滚动。
-  const relativeTop = childTop - parentTop - scrollableParent.scrollTop
-
-  if (relativeTop >= 0 && relativeTop + el.clientHeight <= scrollableParent.clientHeight) return
-
-  const centerOffset =
-    childTop - parentTop - scrollableParent.clientHeight / 2 + el.clientHeight / 2
-
-  scrollableParent.scrollTo({
-    top: centerOffset,
-    behavior: 'smooth',
-  })
-}
-
-export const findScrollableParent = (el: HTMLElement | null): HTMLElement | null => {
-  const parent = el?.parentElement
-
-  if (
-    parent?.classList.contains(PROXIES_PARENT_CLASS) &&
-    parent.scrollHeight > parent.clientHeight
-  ) {
-    return parent
-  }
-
-  return parent ? findScrollableParent(parent) : null
-}
-
-// 新格式 protocol=http/https 优先,旧格式 http / https 标记参数仍保留兼容,最后兜底当前页面协议。
 const getProtocolFromQuery = (query: URLSearchParams) => {
   const protocol = query.get('protocol')
 
@@ -151,25 +135,55 @@ const getProtocolFromQuery = (query: URLSearchParams) => {
   return window.location.protocol.replace(':', '')
 }
 
-export const getBackendFromUrl = () => {
-  const query = new URLSearchParams(
-    window.location.search || location.hash.match(/\?.*$/)?.[0]?.replace('?', ''),
+const getUrlQuery = () => {
+  const query = new URLSearchParams(window.location.search)
+
+  new URLSearchParams(location.hash.match(/\?.*$/)?.[0]).forEach((value, key) =>
+    query.set(key, value),
   )
 
-  if (query.has('hostname')) {
-    return {
-      // 后端类型:'singbox' 走 sing-box API(gRPC),其余(含缺省)按 'clash' 处理。
-      type: (query.get('type') === 'singbox' ? 'singbox' : 'clash') as BackendType,
-      protocol: getProtocolFromQuery(query),
-      secondaryPath: query.get('secondaryPath') || '',
-      host: query.get('hostname') as string,
-      port: query.get('port') as string,
-      password: query.get('secret') || '',
-      label: query.get('label') || '',
-      disableUpgradeCore:
-        query.get('disableUpgradeCore') === '1' || query.get('disableUpgradeCore') === 'core',
-      disableTunMode: query.get('disableTunMode') === '1' || query.get('disableTunMode') === 'tun',
-    }
+  return query
+}
+
+// 后端类型:'singbox' 走 sing-box API(gRPC),'dae' 走 dae 原生 API,其余(含缺省)按 'clash' 处理。
+const getBackendTypeFromQuery = (query: URLSearchParams): BackendType => {
+  const typeParam = query.get('type')
+
+  return typeParam === 'dae' ? 'dae' : typeParam === 'singbox' ? 'singbox' : 'clash'
+}
+
+const getBackendFromQuery = (
+  query: URLSearchParams,
+  host: string,
+  port: string,
+): Omit<Backend, 'uuid'> => ({
+  type: getBackendTypeFromQuery(query),
+  protocol: getProtocolFromQuery(query),
+  secondaryPath: query.get('secondaryPath') || '',
+  host,
+  port,
+  password: query.get('secret') || '',
+  label: query.get('label') || '',
+  disableUpgradeCore:
+    query.get('disableUpgradeCore') === '1' || query.get('disableUpgradeCore') === 'core',
+  disableTunMode: query.get('disableTunMode') === '1' || query.get('disableTunMode') === 'tun',
+})
+
+export const getBackendFromUrl = () => {
+  const query = getUrlQuery()
+
+  if (!query.has('hostname')) return null
+
+  return getBackendFromQuery(query, query.get('hostname') as string, query.get('port') as string)
+}
+
+export const getOriginBackend = () => {
+  const { protocol, hostname, port } = window.location
+
+  if (protocol !== 'http:' && protocol !== 'https:') return null
+
+  return {
+    ...getBackendFromQuery(getUrlQuery(), hostname, port || (protocol === 'https:' ? '443' : '80')),
+    protocol: protocol.slice(0, -1),
   }
-  return null
 }

@@ -8,7 +8,17 @@
         {{ t('earthGlobeTitle') }}
       </div>
       <div class="flex items-center gap-1">
+        <SegmentedControl
+          :title="t('earthProjection')"
+          :model-value="earthProjection"
+          :options="[
+            { value: '3d', label: '3D' },
+            { value: '2d', label: '2D' },
+          ]"
+          @update:model-value="earthProjection = $event as '3d' | '2d'"
+        />
         <SelectInput
+          v-if="!isFlatMap"
           v-model="earthVisualMode"
           class="select select-ghost select-sm h-8 min-h-8 w-auto border-0"
           :aria-label="t('earthVisualStyle')"
@@ -31,6 +41,7 @@
           />
         </button>
         <button
+          v-if="!isFlatMap"
           class="btn btn-ghost btn-sm btn-square"
           :aria-label="t(rotationPaused ? 'earthResumeRotation' : 'earthPauseRotation')"
           :title="t(rotationPaused ? 'earthResumeRotation' : 'earthPauseRotation')"
@@ -67,14 +78,12 @@
 
     <div
       class="relative mt-2 w-full overflow-hidden rounded-xl"
-      :class="[
-        expanded ? 'min-h-0 flex-1' : 'h-96',
-        earthVisualMode === 'flat' ? 'bg-base-200/30' : 'bg-black',
-      ]"
+      :class="[expanded ? 'min-h-0 flex-1' : 'h-96', flatLook ? 'bg-base-200/30' : 'bg-black']"
     >
       <div
         ref="canvasRef"
         class="absolute inset-0 touch-none"
+        @wheel.capture="handleWheelCapture"
         @touchstart.stop
         @touchmove.stop.prevent
         @touchend.stop
@@ -121,27 +130,48 @@
       </div>
 
       <div
-        class="absolute bottom-2 left-2 flex flex-col items-start gap-0.5 text-[10px]"
-        :class="earthVisualMode === 'flat' ? 'text-base-content/55' : 'text-white/65'"
+        class="pointer-events-none absolute right-2 bottom-2 left-2 flex items-end justify-between gap-2"
       >
-        <a
-          class="hover:underline"
-          :class="earthVisualMode === 'flat' ? 'hover:text-base-content' : 'hover:text-white'"
-          href="https://db-ip.com/db/lite.php"
-          target="_blank"
-          rel="noopener noreferrer"
+        <div
+          class="pointer-events-auto flex flex-col items-start gap-0.5 text-[10px]"
+          :class="flatLook ? 'text-base-content/55' : 'text-white/65'"
         >
-          DB-IP City Lite
-        </a>
-        <a
-          class="hover:underline"
-          :class="earthVisualMode === 'flat' ? 'hover:text-base-content' : 'hover:text-white'"
-          href="https://www.solarsystemscope.com/textures/"
-          target="_blank"
-          rel="noopener noreferrer"
+          <a
+            class="hover:underline"
+            :class="flatLook ? 'hover:text-base-content' : 'hover:text-white'"
+            href="https://db-ip.com/db/lite.php"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            DB-IP City Lite
+          </a>
+          <a
+            class="hover:underline"
+            :class="flatLook ? 'hover:text-base-content' : 'hover:text-white'"
+            href="https://www.solarsystemscope.com/textures/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Solar System Scope · CC BY 4.0
+          </a>
+        </div>
+
+        <ul
+          class="bg-base-100/75 flex flex-wrap justify-end gap-x-2.5 gap-y-1 rounded-lg px-2 py-1.5 text-[10px] shadow backdrop-blur-md"
+          :aria-label="t('earthLegend')"
         >
-          Solar System Scope · CC BY 4.0
-        </a>
+          <li
+            v-for="item in legendItems"
+            :key="item.label"
+            class="flex items-center gap-1"
+          >
+            <span
+              class="ring-base-content/20 h-2 w-2 shrink-0 rounded-full ring-1"
+              :style="{ backgroundColor: item.color }"
+            />
+            <span class="text-base-content/70 whitespace-nowrap">{{ item.label }}</span>
+          </li>
+        </ul>
       </div>
 
       <div
@@ -262,6 +292,14 @@
           {{ activeConnections.length ? t('earthNoLocatedConnections') : t('earthNoConnections') }}
         </div>
       </div>
+
+      <div
+        class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/45 p-4 text-center text-sm font-medium text-white transition-opacity duration-300"
+        :class="zoomHintVisible ? 'opacity-100' : 'opacity-0'"
+        :aria-hidden="!zoomHintVisible"
+      >
+        {{ t('earthWheelZoomHint', { key: IS_APPLE_DEVICE ? '⌘' : 'Ctrl' }) }}
+      </div>
     </div>
 
     <Teleport to="body">
@@ -304,14 +342,16 @@
 </template>
 
 <script setup lang="ts">
+import { activeConnections } from '@/assembly/connections'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SelectInput from '@/components/common/SelectInput.vue'
+import { queryDNS } from '@/assembly/config'
 import { getPublicIPInfo, type IPInfo } from '@/api/geoip'
-import { getCachedPublicIPInfo } from '@/composables/overview'
-import { IP_INFO_API } from '@/constant'
+import { getCachedPublicIPInfo } from '@/helper/overview'
+import { IP_INFO_API, IS_APPLE_DEVICE } from '@/constant'
 import { themeColorScheme } from '@/helper/theme'
 import { prettyBytesHelper } from '@/helper/utils'
-import { activeConnections } from '@/store/connections'
-import { earthIPInfoAPI, earthVisualMode, language, theme } from '@/store/settings'
+import { earthIPInfoAPI, earthProjection, earthVisualMode, language, theme } from '@/store/settings'
 import {
   ArrowPathIcon,
   ArrowsPointingInIcon,
@@ -324,9 +364,11 @@ import {
 } from '@heroicons/vue/24/outline'
 import { useMediaQuery } from '@vueuse/core'
 import * as ipaddr from 'ipaddr.js'
+import pLimit from 'p-limit'
 import type { CSSProperties } from 'vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ENDPOINT_PALETTE } from './earth/palette'
 import { buildEarthRoutes } from './earth/routes'
 import {
   DBIP_COMPRESSED_BYTES,
@@ -338,7 +380,7 @@ import {
   type GeoWorkerRequest,
   type GeoWorkerResponse,
 } from './earth/types'
-import type { EarthRenderer } from './earth/earthRenderer'
+import type { EarthRenderer } from './earth/earth-renderer'
 
 const { t } = useI18n()
 const apiOptions = Object.values(IP_INFO_API).map((value) => ({ value, label: value }))
@@ -357,12 +399,16 @@ const showOriginIP = ref(false)
 const showCityLabels = ref(true)
 const rotationPaused = ref(false)
 const expanded = ref(false)
+const zoomHintVisible = ref(false)
 const routeCount = ref(0)
 const routesLoading = ref(false)
 const hoveredEndpoint = ref<EarthEndpointInfo | null>(null)
 const tooltipPosition = ref({ x: 0, y: 0 })
 const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
 const locationCache = new Map<string, EarthLocation | null>()
+const dnsCache = new Map<string, { ip: string | null; expiresAt: number }>()
+const dnsRequests = new Map<string, Promise<string | null>>()
+const dnsLookupLimit = pLimit(6)
 const lookupRequests = new Map<number, (locations: Record<string, EarthLocation | null>) => void>()
 let lookupID = 0
 let worker: Worker | null = null
@@ -371,9 +417,8 @@ let refreshRunning = false
 let refreshQueued = false
 let disposed = false
 let originRequestID = 0
+let zoomHintTimer: ReturnType<typeof setTimeout> | null = null
 
-// 初始化 Worker 与 three/webgpu 渲染器开销较大,先让路由切换动画跑完(0.35s)再在空闲时段执行,
-// 否则移动端切到概览页时主线程被占满,页面要卡一两秒才出现。
 const INIT_DELAY = 400
 const INIT_IDLE_TIMEOUT = 1000
 let initTimer: ReturnType<typeof setTimeout> | null = null
@@ -381,6 +426,14 @@ let initIdleTimer: ReturnType<typeof setTimeout> | null = null
 let initIdleHandle: number | null = null
 
 const isValidIP = (value: string) => Boolean(value && ipaddr.isValid(value))
+
+const normalizeIP = (value: string) => {
+  try {
+    return ipaddr.parse(value).toNormalizedString()
+  } catch {
+    return null
+  }
+}
 
 const maskIP = (value: string) => {
   if (!isValidIP(value)) return '—'
@@ -395,6 +448,9 @@ const maskIP = (value: string) => {
   const parts = address.toNormalizedString().split(':')
   return `${parts[0]}:${parts[1]}:****:****`
 }
+
+const isFlatMap = computed(() => earthProjection.value === '2d')
+const flatLook = computed(() => isFlatMap.value || earthVisualMode.value === 'flat')
 
 const displayedOriginIP = computed(() => {
   if (originStatus.value === 'loading') return t('getting')
@@ -430,12 +486,70 @@ const showNoData = computed(
     !routesLoading.value &&
     routeCount.value === 0,
 )
+const legendItems = computed(() => [
+  { color: ENDPOINT_PALETTE.origin, label: t('earthRole_origin') },
+  { color: ENDPOINT_PALETTE.destination, label: t('earthLegendProxied') },
+  { color: ENDPOINT_PALETTE.direct, label: t('direct') },
+])
 const tooltipStyle = computed<CSSProperties>(() => ({
   left: `${Math.min(window.innerWidth - 190, tooltipPosition.value.x + 12)}px`,
   top: `${Math.min(window.innerHeight - 100, tooltipPosition.value.y + 12)}px`,
 }))
 
 const postWorker = (message: GeoWorkerRequest) => worker?.postMessage(message)
+
+const resolveHostname = (hostname: string) => {
+  const cached = dnsCache.get(hostname)
+
+  if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.ip)
+
+  const pending = dnsRequests.get(hostname)
+
+  if (pending) return pending
+
+  const request = dnsLookupLimit(async () => {
+    for (const { type, answerType } of [
+      { type: 'A', answerType: 1 },
+      { type: 'AAAA', answerType: 28 },
+    ]) {
+      try {
+        const data = await queryDNS({ name: hostname, type })
+
+        for (const answer of data.Answer ?? []) {
+          const ip = answer.type === answerType ? normalizeIP(answer.data) : null
+
+          if (!ip) continue
+
+          dnsCache.set(hostname, {
+            ip,
+            expiresAt: Date.now() + Math.max(1, answer.TTL) * 1000,
+          })
+          return ip
+        }
+      } catch {}
+    }
+
+    dnsCache.set(hostname, { ip: null, expiresAt: Date.now() + 30_000 })
+    return null
+  }).finally(() => dnsRequests.delete(hostname))
+
+  dnsRequests.set(hostname, request)
+  return request
+}
+
+const resolveDestinationIPs = async (hostnames: string[]) => {
+  const entries = await Promise.all(
+    hostnames.map(async (hostname) => [hostname, await resolveHostname(hostname)] as const),
+  )
+
+  while (dnsCache.size > 4096) {
+    const oldest = dnsCache.keys().next().value
+    if (oldest === undefined) break
+    dnsCache.delete(oldest)
+  }
+
+  return Object.fromEntries(entries)
+}
 
 const lookupLocations = async (ips: string[], locale: string) => {
   const result: Record<string, EarthLocation | null> = {}
@@ -506,6 +620,7 @@ const refreshRoutes = async () => {
         language.value,
         lookupLocations,
         preferredOrigin,
+        resolveDestinationIPs,
       )
 
       if (
@@ -628,6 +743,27 @@ const toggleCityLabels = () => {
   renderer.value?.setCityLabelsVisible(showCityLabels.value)
 }
 
+const ZOOM_HINT_DURATION = 1200
+
+const handleWheelCapture = (event: WheelEvent) => {
+  if (expanded.value) return
+  if (event.ctrlKey || event.metaKey) {
+    event.preventDefault()
+    if (zoomHintTimer) clearTimeout(zoomHintTimer)
+    zoomHintTimer = null
+    zoomHintVisible.value = false
+    return
+  }
+  if (!renderer.value) return
+  event.stopPropagation()
+  zoomHintVisible.value = true
+  if (zoomHintTimer) clearTimeout(zoomHintTimer)
+  zoomHintTimer = setTimeout(() => {
+    zoomHintVisible.value = false
+    zoomHintTimer = null
+  }, ZOOM_HINT_DURATION)
+}
+
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Escape' && expanded.value) expanded.value = false
 }
@@ -639,6 +775,7 @@ watch(language, () => {
   scheduleRouteRefresh()
 })
 watch(reducedMotion, (value) => renderer.value?.setReducedMotion(value))
+watch(earthProjection, (value) => renderer.value?.setProjection(value))
 watch(earthVisualMode, (value) => renderer.value?.setVisualMode(value))
 watch(
   theme,
@@ -660,11 +797,12 @@ const initialize = async () => {
   await nextTick()
 
   try {
-    const { createEarthRenderer } = await import('./earth/earthRenderer')
+    const { createEarthRenderer } = await import('./earth/earth-renderer')
 
     if (!canvasRef.value || disposed) return
     const createdRenderer = await createEarthRenderer(canvasRef.value, {
       reducedMotion: reducedMotion.value,
+      projection: earthProjection.value,
       visualMode: earthVisualMode.value,
       colorScheme: themeColorScheme.value,
       onEndpointHover: handleEndpointHover,
@@ -715,6 +853,7 @@ onBeforeUnmount(() => {
   disposed = true
   window.removeEventListener('keydown', handleKeydown)
   if (refreshTimer) clearTimeout(refreshTimer)
+  if (zoomHintTimer) clearTimeout(zoomHintTimer)
   if (initTimer) clearTimeout(initTimer)
   if (initIdleTimer) clearTimeout(initIdleTimer)
   if (initIdleHandle !== null) cancelIdleCallback(initIdleHandle)
@@ -723,6 +862,8 @@ onBeforeUnmount(() => {
   worker?.removeEventListener('message', handleWorkerMessage)
   worker?.terminate()
   worker = null
+  dnsCache.clear()
+  dnsRequests.clear()
   lookupRequests.clear()
 })
 </script>

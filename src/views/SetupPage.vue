@@ -36,8 +36,6 @@
         {{ isSubmitting ? $t('backendConnecting') : $t('submit') }}
       </button>
 
-      <!-- 已经存过后端却落到这里(当前后端被删、或存档里的 uuid 失效),
-           给一条回到管理面板的路,而不是逼他把地址重填一遍。 -->
       <button
         v-if="backendList.length"
         class="btn btn-ghost btn-sm w-full"
@@ -57,23 +55,25 @@
 </template>
 
 <script setup lang="ts">
-import { probeBackend } from '@/assembly/backend'
+import { probeBackend } from '@/assembly/probe'
 import DashboardSettings from '@/components/common/DashboardSettings.vue'
 import ReachabilityIndicator from '@/components/common/ReachabilityIndicator.vue'
 import BackendForm from '@/components/settings/backend/BackendForm.vue'
 import LanguageSelect from '@/components/settings/general/LanguageSelect.vue'
 import { ROUTE_NAME } from '@/constant'
-import { syncSettingsFromCore } from '@/helper/autoImportSettings'
-import { useBackendReachability } from '@/composables/backendReachability'
+import { syncSettingsFromCore } from '@/helper/auto-import-settings'
+import { useBackendReachability } from '@/composables/use-backend-reachability'
 import { describeProbeFailure } from '@/helper/connectivity'
 import { showNotification } from '@/helper/notification'
-import { getBackendFromUrl, getBackendProbeUrl } from '@/helper/utils'
+import { getBackendFromUrl, getBackendProbeUrl, getOriginBackend } from '@/helper/utils'
 import router from '@/router'
 import { addBackend, backendList, openBackendManager } from '@/store/setup'
 import type { Backend, BackendType } from '@/types'
 import { computed, ref, watch } from 'vue'
 
-const form = ref<Omit<Backend, 'uuid'>>({
+type SetupForm = Omit<Backend, 'uuid'>
+
+const defaultForm: SetupForm = {
   type: 'clash' as BackendType,
   protocol: 'http',
   host: '127.0.0.1',
@@ -81,39 +81,42 @@ const form = ref<Omit<Backend, 'uuid'>>({
   secondaryPath: '',
   password: '',
   label: '',
-})
+}
 
-// 填表期间就持续探测:通不通、为什么不通,在按提交之前就该看得见。
+const urlBackend = getBackendFromUrl()
+const originBackend = !urlBackend && backendList.value.length === 0 ? getOriginBackend() : null
+const form = ref<SetupForm>({ ...(originBackend ?? defaultForm) })
+
 const reachability = useBackendReachability(form)
 
 const isSubmitting = ref(false)
 const canSubmit = computed(() => reachability.status.value === 'online' && !isSubmitting.value)
 
-type SetupForm = Omit<Backend, 'uuid'>
+let detectController: AbortController | null = null
 
-const finishLogin = async () => {
+const login = async (backend: SetupForm) => {
+  addBackend(backend)
+  await router.push({ name: ROUTE_NAME.proxies })
+
   try {
-    const synced = await syncSettingsFromCore()
-    if (synced) return
+    await syncSettingsFromCore()
   } catch (error) {
     console.error('Failed to sync settings after login:', error)
   }
-  router.push({ name: ROUTE_NAME.proxies })
 }
 
-// 提交 = 再确认一次连通性后存下并进入面板。
-// 失败不再弹 alert:原因写在表单里的可达性指示器上,用户改哪个字段一目了然。
-const handleSubmit = async (setupForm: SetupForm, quiet = false) => {
+const handleSubmit = async (setupForm: SetupForm) => {
   const { protocol, host, port } = setupForm
 
   if (!protocol || !host || !port) return
   if (isSubmitting.value) return
 
+  detectController?.abort()
+
   if (
     window.location.protocol === 'https:' &&
     protocol === 'http' &&
-    !['::1', '0.0.0.0', '127.0.0.1', 'localhost'].includes(host) &&
-    !quiet
+    !['::1', '0.0.0.0', '127.0.0.1', 'localhost'].includes(host)
   ) {
     showNotification({ content: 'protocolTips' })
   }
@@ -121,14 +124,12 @@ const handleSubmit = async (setupForm: SetupForm, quiet = false) => {
   isSubmitting.value = true
 
   try {
-    const result = await probeBackend({ uuid: '', ...setupForm })
+    const result = await probeBackend({ uuid: '', ...setupForm }, undefined, undefined, true)
 
     if (!result.ok) {
-      // 表单自身的失败已经由指示器呈现,让它重探一轮拿到最新结论即可;
-      // URL 带来的后端不在表单里,只能单独提示。
-      if (setupForm === form.value) {
+      if (result.kind !== 'unauthorized' && setupForm === form.value) {
         reachability.retry()
-      } else if (!quiet) {
+      } else {
         showNotification({
           content: await describeProbeFailure(result, getBackendProbeUrl(setupForm)),
           type: 'alert-error',
@@ -137,27 +138,47 @@ const handleSubmit = async (setupForm: SetupForm, quiet = false) => {
       return
     }
 
-    addBackend(setupForm)
-    await finishLogin()
+    await login(setupForm)
   } finally {
     isSubmitting.value = false
   }
 }
 
-const backend = getBackendFromUrl()
-
-if (backend) {
-  handleSubmit(backend)
-} else if (backendList.value.length === 0) {
-  // 一个后端都没有时,默认地址本来就通就别再让用户点一次 ——
-  // 但只认首轮探测的结论,之后一律以用户的操作为准。
-  const stopAutoLogin = watch(
-    () => reachability.status.value,
-    (status) => {
-      if (status === 'checking') return
-      stopAutoLogin()
-      if (status === 'online') handleSubmit(form.value, true)
-    },
+const detectBackend = async (candidates: SetupForm[], signal: AbortSignal) => {
+  const probes = candidates.map((candidate) =>
+    probeBackend({ uuid: '', ...candidate }, undefined, signal, true),
   )
+
+  for (const [index, probe] of probes.entries()) {
+    const result = await probe
+
+    if (result.ok || result.kind === 'unauthorized') {
+      return { backend: candidates[index], ok: result.ok }
+    }
+  }
+
+  return null
+}
+
+const autoDetect = async (candidates: SetupForm[]) => {
+  const controller = new AbortController()
+  const stopOnEdit = watch(form, () => controller.abort(), { deep: true })
+
+  detectController = controller
+
+  const detected = await detectBackend(candidates, controller.signal)
+
+  stopOnEdit()
+  if (controller.signal.aborted) return
+  controller.abort()
+
+  form.value = { ...(detected?.backend ?? defaultForm) }
+  if (detected?.ok) await login(detected.backend)
+}
+
+if (urlBackend) {
+  handleSubmit(urlBackend)
+} else if (backendList.value.length === 0) {
+  autoDetect(originBackend ? [originBackend, defaultForm] : [defaultForm])
 }
 </script>

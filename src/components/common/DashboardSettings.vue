@@ -47,7 +47,7 @@
             :disabled="isStorageSubmitting"
             @click="handlerClickSyncSettings"
           >
-            <ArrowPathIcon class="h-4 w-4" />
+            <ArrowDownTrayIcon class="h-4 w-4" />
           </button>
         </div>
         <div class="setting-item">
@@ -104,7 +104,7 @@
           class="btn btn-sm"
           @click="exportSettings"
         >
-          <ArrowDownCircleIcon class="h-4 w-4" />
+          <ArrowUpTrayIcon class="h-4 w-4" />
         </button>
       </div>
       <div class="setting-item">
@@ -115,7 +115,7 @@
           class="btn btn-sm"
           @click="importSettingsFromFile"
         >
-          <ArrowUpCircleIcon class="h-4 w-4" />
+          <ArrowDownTrayIcon class="h-4 w-4" />
         </button>
       </div>
     </div>
@@ -204,7 +204,7 @@
 </template>
 
 <script setup lang="ts">
-import { deleteStorageAPI, setStorageAPI } from '@/assembly/storage'
+import { deleteSyncedSettings, setSyncedSettings } from '@/assembly/storage'
 import { can } from '@/assembly/backend'
 import {
   autoImportSettings,
@@ -215,11 +215,11 @@ import {
   skipImportSettingsConfirm,
   skipSyncSettingsConfirm,
   syncSettingsFromCore,
-} from '@/helper/autoImportSettings'
+} from '@/helper/auto-import-settings'
 import { LOCAL_IMAGE } from '@/helper/indexeddb'
-import { showNotification } from '@/helper/notification'
-import { notifyRequestError } from '@/helper/requestError'
-import { useTooltip } from '@/helper/tooltip'
+import { dismissNotification, notifyActionPending, showNotification } from '@/helper/notification'
+import { notifyRequestError } from '@/helper/request-error'
+import { useTooltip } from '@/composables/use-tooltip'
 import {
   applyDashboardSettingsToStorage,
   exportSettings,
@@ -228,10 +228,7 @@ import {
 } from '@/helper/utils'
 import { customBackgroundURL } from '@/store/settings'
 import {
-  ArrowDownCircleIcon,
   ArrowDownTrayIcon,
-  ArrowPathIcon,
-  ArrowUpCircleIcon,
   ArrowUpTrayIcon,
   Cog6ToothIcon,
   QuestionMarkCircleIcon,
@@ -245,7 +242,6 @@ import TextInput from './TextInput.vue'
 
 withDefaults(
   defineProps<{
-    /** 仅显示图标的触发按钮，用于左侧已有文字标签的设置行 */
     iconOnly?: boolean
   }>(),
   { iconOnly: false },
@@ -292,6 +288,7 @@ const handlerClickUploadSettings = async () => {
   if (isStorageSubmitting.value) return
 
   isStorageSubmitting.value = true
+  const notifyKey = notifyActionPending('uploadSettings')
   try {
     dashboardSettingsDialogShow.value = false
     const settings = getDashboardSettingsFromStorage()
@@ -306,8 +303,9 @@ const handlerClickUploadSettings = async () => {
       delete settings['config/icon-reflect-list']
     }
 
-    await setStorageAPI(settings)
+    await setSyncedSettings(settings)
     showNotification({
+      key: notifyKey,
       content: 'uploadSettingsSuccess',
       type: 'alert-success',
     })
@@ -318,7 +316,7 @@ const handlerClickUploadSettings = async () => {
       })
     }
   } catch (e) {
-    notifyRequestError(e)
+    notifyRequestError(e, notifyKey)
   } finally {
     isStorageSubmitting.value = false
   }
@@ -328,14 +326,16 @@ const handlerClickSyncSettings = async () => {
   if (isStorageSubmitting.value) return
 
   isStorageSubmitting.value = true
+  const notifyKey = notifyActionPending('syncSettings')
   try {
     dashboardSettingsDialogShow.value = false
     await syncSettingsFromCore({
       force: true,
       notify: true,
     })
+    dismissNotification(notifyKey)
   } catch (e) {
-    notifyRequestError(e)
+    notifyRequestError(e, notifyKey)
   } finally {
     isStorageSubmitting.value = false
   }
@@ -346,21 +346,22 @@ const handlerClickDeleteUploadedSettings = async () => {
   if (!window.confirm(t('deleteUploadedSettingsConfirm'))) return
 
   isStorageSubmitting.value = true
+  const notifyKey = notifyActionPending('deleteUploadedSettings')
   try {
-    await deleteStorageAPI()
+    await deleteSyncedSettings()
     dashboardSettingsDialogShow.value = false
     showNotification({
+      key: notifyKey,
       content: 'deleteUploadedSettingsSuccess',
       type: 'alert-success',
     })
   } catch (e) {
-    notifyRequestError(e)
+    notifyRequestError(e, notifyKey)
   } finally {
     isStorageSubmitting.value = false
   }
 }
 
-// 用户刚打开「自动同步」开关,等同于一次手动同步,失败要说明原因。
 watch(autoSyncSettings, async (value, oldValue) => {
   if (!value || oldValue || isStorageSubmitting.value) return
 

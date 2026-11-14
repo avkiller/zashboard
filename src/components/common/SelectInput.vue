@@ -89,8 +89,9 @@
 </template>
 
 <script setup lang="ts" generic="T = unknown">
-import { useFloatingMenu } from '@/composables/floatingMenu'
+import { useFloatingMenu } from '@/composables/use-floating-menu'
 import { CheckIcon } from '@heroicons/vue/24/outline'
+import { isEqual } from 'lodash'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId, watch } from 'vue'
 
 export type SelectOption<T = unknown> = {
@@ -148,13 +149,16 @@ const triggerAttrs = () => {
   return rest
 }
 const ariaLabel = () => attrs['aria-label']?.toString()
+const isSameValue = (a: T, b: T) =>
+  Object.is(a, b) ||
+  (typeof a === 'object' && a !== null && typeof b === 'object' && b !== null && isEqual(a, b))
 const selectedIndex = computed(() =>
-  props.options.findIndex((option) => Object.is(option.value, model.value)),
+  props.options.findIndex((option) => isSameValue(option.value, model.value)),
 )
 const selectedOption = computed(() => props.options[selectedIndex.value])
 
 const optionId = (index: number) => `${listboxId}-option-${index}`
-const isSelected = (option: SelectOption<T>) => Object.is(option.value, model.value)
+const isSelected = (option: SelectOption<T>) => isSameValue(option.value, model.value)
 
 const firstEnabledIndex = () => props.options.findIndex((option) => !option.disabled)
 const lastEnabledIndex = () => {

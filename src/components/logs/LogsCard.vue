@@ -41,7 +41,7 @@
 <script setup lang="ts">
 import { can } from '@/assembly/backend'
 import HighlightText from '@/components/common/HighlightText.vue'
-import { useBounceOnVisible } from '@/composables/bouncein'
+import { useBounceOnVisible } from '@/composables/use-bounce-on-visible'
 import { LOG_LEVEL } from '@/constant'
 import { getLogConnectionID, logFilter } from '@/store/logs'
 import type { LogWithSeq } from '@/types'

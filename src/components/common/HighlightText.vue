@@ -5,7 +5,7 @@
   >
     <mark
       v-if="part.matched"
-      class="search-highlight"
+      class="rounded-xs bg-yellow-300 text-black"
       :style="part.style"
     >
       {{ part.text }}
@@ -21,17 +21,10 @@
 </template>
 
 <script setup lang="ts">
-import { parseAnsiText } from '@/helper/ansi'
+import { parseAnsiHighlight, type AnsiHighlightSegment } from '@/helper/ansi'
 import { getSearchTextParts } from '@/helper/search'
 import { themeColorScheme } from '@/helper/theme'
-import type { CSSProperties } from 'vue'
 import { computed } from 'vue'
-
-type HighlightTextPart = {
-  text: string
-  matched: boolean
-  style?: CSSProperties
-}
 
 const props = withDefaults(
   defineProps<{
@@ -44,14 +37,9 @@ const props = withDefaults(
   },
 )
 
-const parts = computed<HighlightTextPart[]>(() => {
-  if (!props.ansi) return getSearchTextParts(props.text, props.filter)
-
-  return parseAnsiText(props.text, themeColorScheme.value).flatMap<HighlightTextPart>((segment) =>
-    getSearchTextParts(segment.text, props.filter).map((part) => ({
-      ...part,
-      style: segment.style,
-    })),
-  )
-})
+const parts = computed<AnsiHighlightSegment[]>(() =>
+  props.ansi
+    ? parseAnsiHighlight(props.text, props.filter, themeColorScheme.value)
+    : getSearchTextParts(props.text, props.filter),
+)
 </script>

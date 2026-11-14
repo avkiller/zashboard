@@ -1,14 +1,3 @@
-// api 层 · Clash 通道(REST / WebSocket)的纯请求函数。
-//
-// 「Clash 通道」上跑着三种方言(mihomo / sing-box / honk),本文件按方言分区:
-//   1. 通用         —— 三种方言都提供
-//   2. mihomo 专属  —— mihomo(含 smart 分支)的扩展端点,sing-box 与 honk 没有
-//   3. sing-box 的 Clash 兼容 API 专属 —— 仅 sing-box 提供的端点
-// honk 实现的是通用分区的子集(没有 /upgrade/ui),故不单列分区,差异见能力表。
-// sing-box API(gRPC)是另一条通道,不在这里,见 api/singbox/。
-//
-// 新增端点时请放进对应分区。是否向用户暴露由 assembly/backend.ts 的能力表决定,
-// 本层不做任何后端判断。
 import type { ProbeResult } from '@/helper/connectivity'
 import { getUrlFromBackend } from '@/helper/utils'
 import { activeBackend } from '@/store/setup'
@@ -16,6 +5,7 @@ import type {
   Backend,
   Config,
   DNSQuery,
+  HonkStats,
   NodeRank,
   Proxy,
   ProxyProvider,
@@ -26,10 +16,7 @@ import axios from 'axios'
 import { debounce } from 'lodash'
 import ReconnectingWebSocket from 'reconnectingwebsocket'
 import { shallowRef } from 'vue'
-
-// ==========================================================================
-// 两方言共用
-// ==========================================================================
+import './http'
 
 export const fetchClashVersion = () => axios.get<{ version: string }>('/version')
 
@@ -54,9 +41,6 @@ export const fetchProxyLatencyAPI = (proxyName: string, url: string, timeout: nu
   })
 }
 
-// provider 节点可能不在全局 /proxies 映射中(或与其他 provider 的同名节点冲突),
-// 已知所属 provider 时用该端点测指定节点;与 /proxies/{name}/delay 共用内核的
-// getProxyDelay,同样返回 { delay }
 export const fetchProxyProviderLatencyAPI = (
   providerName: string,
   proxyName: string,
@@ -142,11 +126,6 @@ export const queryDNSAPI = (params: { name: string; type: string }) => {
   })
 }
 
-// 面板自升级。mihomo 与 sing-box 的 Clash 兼容 API 都提供,honk 没有(见 dashboardUpgrade)。
-export const upgradeUIAPI = () => {
-  return axios.post('/upgrade/ui')
-}
-
 export const createClashWebSocket = <T>(url: string, searchParams?: Record<string, string>) => {
   const backend = activeBackend.value!
   const resurl = new URL(`${getUrlFromBackend(backend).replace('http', 'ws')}/${url}`)
@@ -178,9 +157,6 @@ export const createClashWebSocket = <T>(url: string, searchParams?: Record<strin
   }
 }
 
-// 连通性探测。打的就是面板实际在用的那条 API(/version),所以它通了就是真通了。
-// 失败时区分「密码不对 / 端点不对 / 超时 / 不透明网络错误」四类 —— 浏览器只肯说最后
-// 一种,剩下三种能在这里确知的就别推给诊断去猜(见 helper/connectivity)。
 export const probeClashChannel = async (
   backend: Backend,
   timeout: number,
@@ -204,7 +180,23 @@ export const probeClashChannel = async (
       signal: controller.signal,
     })
 
-    if (res.ok) return { ok: true, latency: latency() }
+    if (res.ok) {
+      const data = await res.json().catch((error) => {
+        if (controller.signal.aborted) throw error
+        return null
+      })
+
+      if (typeof data?.version === 'string' && data.version.length > 0) {
+        return { ok: true, latency: latency() }
+      }
+
+      return {
+        ok: false,
+        latency: latency(),
+        kind: 'http',
+        message: 'Invalid Clash API version response',
+      }
+    }
 
     return {
       ok: false,
@@ -213,7 +205,6 @@ export const probeClashChannel = async (
       message: `HTTP ${res.status}`,
     }
   } catch (e) {
-    // 外部取消(切走了 / 组件卸载)不是失败,但调用方已经不看结果了,归入超时即可。
     return {
       ok: false,
       latency: latency(),
@@ -226,37 +217,8 @@ export const probeClashChannel = async (
   }
 }
 
-// ==========================================================================
-// mihomo 专属(sing-box 官方版的 Clash 兼容 API 不提供)
-// ==========================================================================
-
-// smart 内核的节点权重。是否暴露由数据决定(proxy.type === 'smart'),不走能力表。
-export const fetchSmartWeightsAPI = () => {
-  return axios.get<{
-    message: string
-    weights: Record<string, NodeRank[]>
-  }>(`/group/weights`)
-}
-
-// deprecated
-export const fetchSmartGroupWeightsAPI = (proxyName: string) => {
-  return axios.get<{
-    message: string
-    weights: NodeRank[]
-  }>(`/group/${encodeURIComponent(proxyName)}/weights`)
-}
-
-export const flushSmartGroupWeightsAPI = () => {
-  return axios.post(`/cache/smart/flush`)
-}
-
-// 按索引批量切换规则启用状态;sing-box 侧走 toggleRuleDisabledSingBoxAPI。
 export const toggleRuleDisabledAPI = (data: Record<number, boolean>) => {
   return axios.patch(`/rules/disable`, data)
-}
-
-export const blockConnectionByIdAPI = (id: string) => {
-  return axios.delete(`/connections/smart/${id}`)
 }
 
 export const reloadConfigsAPI = () => {
@@ -287,7 +249,10 @@ export const restartCoreAPI = () => {
   return axios.post('/restart')
 }
 
-// 面板设置同步。/storage/zashboard 是 mihomo 扩展。
+export const upgradeUIAPI = () => {
+  return axios.post('/upgrade/ui')
+}
+
 export const getStorageAPI = () => {
   return axios.get<Record<string, unknown>>(`/storage/zashboard`)
 }
@@ -300,12 +265,23 @@ export const deleteStorageAPI = () => {
   return axios.delete(`/storage/zashboard`)
 }
 
-// ==========================================================================
-// sing-box 的 Clash 兼容 API 专属
-// ==========================================================================
+export const fetchSmartWeightsAPI = () => {
+  return axios.get<{
+    message: string
+    weights: Record<string, NodeRank[]>
+  }>(`/group/weights`)
+}
 
-// sing-box 的规则带稳定 uuid,按 uuid 切换启用状态;mihomo 走 PATCH /rules/disable。
-// 两者的选择由响应数据(rule.uuid 是否存在)决定,见 assembly/rules。
-export const toggleRuleDisabledSingBoxAPI = (uuid: string) => {
+export const flushSmartGroupWeightsAPI = () => {
+  return axios.post(`/cache/smart/flush`)
+}
+
+export const blockConnectionByIdAPI = (id: string) => {
+  return axios.delete(`/connections/smart/${id}`)
+}
+
+export const fetchHonkStatsAPI = () => axios.get<HonkStats>('/stats')
+
+export const toggleRuleDisabledRefindAPI = (uuid: string) => {
   return axios.put(`/rules/${encodeURIComponent(uuid)}`)
 }
