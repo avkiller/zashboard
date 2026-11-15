@@ -54,19 +54,56 @@ export default defineComponent({
     const logFilterOptions = computed(() => {
       const types: string[] = []
       const levels: string[] = []
+      const validLevels = logLevels.value
+      // 常见的状态关键词，如果 payload 中包含这些词，就作为可选项加入下拉菜单
+      const STATUS_KEYWORDS = [
+      // 连接结果类
+      'rejected', 'failed', 'timeout', 'aborted', 'refused',
+      // DNS 动作类
+      'dns: exchange', 'dns: refreshed', 'dns: optimistic', 'dns: lookup', 'domain:',
+      // 路由匹配类
+      'router: match', 'router: pre-match', 'router: dropped', 'router: connection', 'router: sniffed',
+      ]
 
+      // 辅助函数：从 visiblePayload 中提取简洁的类型前缀
+      // 兼容 Clash: "[3243932686 0ms] inbound/direct[dns-in]: ..."
+      // 兼容 gRPC: "INFO[238277] [1228898104 0ms] inbound/direct[dns-in]: ..."
+      const extractType = (payload: string): string => {
+        let text = payload.trim()
+        // 1. 剥离 gRPC 模式下特有的等级前缀，例如 "INFO[238277] "
+        text = text.replace(/^[A-Z]+\[\d+\]\s*/, '')
+        // 2. 提取真正的内容前缀
+        let type = ''
+        if (text.includes(':')) {
+          const startIndex = text.startsWith('[') ? text.indexOf(']') + 2 : 0
+          const endIndex = text.indexOf(':', startIndex)
+          if (endIndex !== -1 && endIndex - startIndex < 40) {
+            type = text.slice(startIndex, endIndex + 1)
+          }
+        } else {
+          const index = text.indexOf(' ')
+          if (index !== -1 && index < 40) {
+            type = text.slice(0, index)
+          }
+        }
+        return type
+      }
       if (can('logTypeFilter')) {
         for (const log of logs.value) {
-          const { visiblePayload } = log
-          const startIndex = visiblePayload.startsWith('[') ? visiblePayload.indexOf(']') + 2 : 0
-          const endIndex = visiblePayload.indexOf(':', startIndex)
-          const type = visiblePayload.slice(startIndex, endIndex + 1)
+          const type = extractType(log.visiblePayload)
 
-          if (!types.includes(type)) {
+          if (type && !types.includes(type)) {
             types.push(type)
           }
-
-          if (!levels.includes(log.type)) {
+          // 扫描状态关键词
+          const lowerPayload = log.visiblePayload.toLowerCase()
+          for (const keyword of STATUS_KEYWORDS) {
+            if (lowerPayload.includes(keyword) && !types.includes(keyword)) {
+              types.push(keyword)
+            }
+          }
+          // 只有属于标准等级才加入 levels，防止 sing-box 特有类型污染下拉框
+          if (validLevels.includes(log.type as LOG_LEVEL) && !levels.includes(log.type)) {
             levels.push(log.type)
           }
         }
@@ -74,13 +111,18 @@ export default defineComponent({
         for (const log of logs.value) {
           const { visiblePayload } = log
           const index = visiblePayload.indexOf(' ')
-          const type = index === -1 ? visiblePayload : visiblePayload.slice(0, index)
+          const type = index === -1 || index >= 40 ? '' : visiblePayload.slice(0, index)
 
-          if (!types.includes(type)) {
+          if (type && !types.includes(type)) {
             types.push(type)
           }
-
-          if (!levels.includes(log.type)) {
+          const lowerPayload = visiblePayload.toLowerCase()
+          for (const keyword of STATUS_KEYWORDS) {
+            if (lowerPayload.includes(keyword) && !types.includes(keyword)) {
+              types.push(keyword)
+            }
+          }
+          if (validLevels.includes(log.type as LOG_LEVEL) && !levels.includes(log.type)) {
             levels.push(log.type)
           }
         }
@@ -88,8 +130,8 @@ export default defineComponent({
 
       return {
         levels: levels.sort((a, b) => {
-          const aIdx = logLevels.value.indexOf(a as LOG_LEVEL)
-          const bIdx = logLevels.value.indexOf(b as LOG_LEVEL)
+          const aIdx = validLevels.indexOf(a as LOG_LEVEL)
+          const bIdx = validLevels.indexOf(b as LOG_LEVEL)
           return aIdx - bIdx
         }),
         types: types.sort(),
